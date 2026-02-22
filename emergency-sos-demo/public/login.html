@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SafeAlert – Sign In</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="toast"></div>
+  <div class="auth-page">
+    <div class="auth-card">
+      <div class="logo">🚨</div>
+      <h2 id="form-title">Sign In</h2>
+      <p class="sub" id="form-sub">Access your emergency dashboard</p>
+
+      <form id="auth-form">
+        <div class="form-group" id="name-group" style="display:none">
+          <label>Full Name</label>
+          <input type="text" id="name" placeholder="Jane Doe" />
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" id="email" placeholder="you@example.com" required />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="password" placeholder="••••••••" required />
+        </div>
+        <button type="submit" class="btn-primary" id="submit-btn">Sign In</button>
+      </form>
+
+      <div class="auth-footer" id="auth-footer">
+        No account? <a href="#" id="toggle-link">Create one</a>
+      </div>
+      <div class="auth-footer" style="margin-top:8px">
+        <a href="index.html">← Back to home</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const mode = params.get('mode') || 'login';
+
+    let isRegister = mode === 'register';
+    const isAdmin = mode === 'admin';
+
+    const toast = document.getElementById('toast');
+    function showToast(msg, type = '') {
+      toast.textContent = msg;
+      toast.className = `show ${type}`;
+      setTimeout(() => toast.className = '', 3000);
+    }
+
+    function setMode(reg) {
+      isRegister = reg;
+      document.getElementById('form-title').textContent = isAdmin ? 'Admin Login' : (reg ? 'Create Account' : 'Sign In');
+      document.getElementById('form-sub').textContent = reg ? 'Join SafeAlert today' : (isAdmin ? 'Responder access only' : 'Access your emergency dashboard');
+      document.getElementById('name-group').style.display = reg ? 'block' : 'none';
+      document.getElementById('submit-btn').textContent = reg ? 'Create Account' : 'Sign In';
+      document.getElementById('auth-footer').style.display = isAdmin ? 'none' : 'block';
+    }
+
+    setMode(isRegister);
+
+    document.getElementById('toggle-link').addEventListener('click', e => {
+      e.preventDefault();
+      setMode(!isRegister);
+    });
+
+    document.getElementById('auth-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      const btn = document.getElementById('submit-btn');
+      btn.disabled = true;
+      btn.textContent = 'Please wait…';
+
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+
+      try {
+        if (isRegister) {
+          const name = document.getElementById('name').value.trim();
+          const res = await fetch('/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, email, password })
+          });
+          const data = await res.json();
+          if (!res.ok) { showToast(data.error, 'error'); return; }
+          showToast('Account created! Signing you in…', 'success');
+          setTimeout(() => setMode(false), 1000);
+        } else {
+          const res = await fetch('/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+          });
+          const data = await res.json();
+          if (!res.ok) { showToast(data.error, 'error'); return; }
+          if (data.role === 'admin') {
+            location.href = 'admin.html';
+          } else {
+            location.href = 'dashboard.html';
+          }
+        }
+      } catch {
+        showToast('Network error. Try again.', 'error');
+      } finally {
+        btn.disabled = false;
+        setMode(isRegister);
+      }
+    });
+  </script>
+</body>
+</html>

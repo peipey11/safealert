@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SafeAlert – Admin Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body { height: 100%; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <div id="toast"></div>
+
+  <div class="admin-layout">
+    <!-- HEADER -->
+    <header class="admin-header">
+      <div class="admin-header-left">
+        <h1>🚨 SafeAlert Response</h1>
+        <div class="live-badge">
+          <div class="live-dot"></div>
+          LIVE
+        </div>
+      </div>
+      <div class="admin-stats">
+        <div class="stat-chip danger">
+          <strong id="stat-active">0</strong> Active SOS
+        </div>
+        <div class="stat-chip">
+          <strong id="stat-users">0</strong> Users
+        </div>
+        <div class="stat-chip">
+          <strong id="stat-total">0</strong> Total Alerts
+        </div>
+        <button class="btn-ghost" onclick="logout()" style="padding:6px 14px;font-size:13px;">Sign Out</button>
+      </div>
+    </header>
+
+    <!-- BODY: MAP + PANEL -->
+    <div class="admin-body">
+      <div id="map"></div>
+
+      <div class="admin-panel">
+        <div class="panel-tabs">
+          <button class="tab-btn active" onclick="switchTab('emergencies', this)">🔴 Active</button>
+          <button class="tab-btn" onclick="switchTab('log', this)">📋 Log</button>
+        </div>
+
+        <!-- ACTIVE EMERGENCIES -->
+        <div class="tab-content active" id="tab-emergencies">
+          <div id="emergency-list">
+            <div class="no-data">No active emergencies<br><span style="font-size:11px">Polling every 10 seconds…</span></div>
+          </div>
+        </div>
+
+        <!-- SOS LOG -->
+        <div class="tab-content" id="tab-log">
+          <div id="log-list">
+            <div class="no-data">Loading log…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const toast = document.getElementById('toast');
+    function showToast(msg, type = '') {
+      toast.textContent = msg;
+      toast.className = `show ${type}`;
+      setTimeout(() => toast.className = '', 3000);
+    }
+
+    // ── Auth Guard ────────────────────────────────────────────────────────────
+    fetch('/me').then(async r => {
+      if (!r.ok) { location.href = 'login.html'; return; }
+      const d = await r.json();
+      if (!d.isAdmin) location.href = 'login.html';
+    }).catch(() => location.href = 'login.html');
+
+    // ── Map Setup ─────────────────────────────────────────────────────────────
+    const map = L.map('map').setView([20.5937, 78.9629], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    const redIcon = L.divIcon({
+      className: '',
+      html: `<div style="
+        width:36px;height:36px;background:#e63946;border-radius:50%;
+        display:flex;align-items:center;justify-content:center;
+        font-size:18px;border:3px solid #c1121f;
+        box-shadow:0 0 0 6px rgba(230,57,70,0.3);
+        animation:sos-pulse 1.5s ease-in-out infinite;
+      ">🚨</div>`,
+      iconSize: [36, 36],
+      iconAnchor: [18, 18],
+      popupAnchor: [0, -20]
+    });
+
+    // Inject animation into page
+    const style = document.createElement('style');
+    style.textContent = `@keyframes sos-pulse { 0%,100%{box-shadow:0 0 0 6px rgba(230,57,70,0.3)} 50%{box-shadow:0 0 0 14px rgba(230,57,70,0)} }`;
+    document.head.appendChild(style);
+
+    let markers = {};
+
+    function timeAgo(dateStr) {
+      const diff = Math.floor((Date.now() - new Date(dateStr + ' UTC')) / 1000);
+      if (diff < 60) return `${diff}s ago`;
+      if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+      return `${Math.floor(diff/3600)}h ago`;
+    }
+
+    // ── Fetch & Render Emergencies ────────────────────────────────────────────
+    async function fetchEmergencies() {
+      try {
+        const res = await fetch('/admin/emergencies');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const currentIds = new Set(data.map(u => u.id));
+
+        // Remove resolved markers
+        for (const id in markers) {
+          if (!currentIds.has(Number(id))) {
+            map.removeLayer(markers[id]);
+            delete markers[id];
+          }
+        }
+
+        // Add/update markers
+        data.forEach(user => {
+          if (markers[user.id]) {
+            markers[user.id].setLatLng([user.latitude, user.longitude]);
+          } else {
+            markers[user.id] = L.marker([user.latitude, user.longitude], { icon: redIcon })
+              .addTo(map)
+              .bindPopup(`<strong>${user.name}</strong><br><small>${user.latitude.toFixed(4)}, ${user.longitude.toFixed(4)}</small>`);
+          }
+        });
+
+        // If new emergencies appeared
+        if (data.length > Object.keys(markers).length - 1) {
+          // intentionally no noise here; markers handle it
+        }
+
+        // Render sidebar list
+        const list = document.getElementById('emergency-list');
+        if (data.length === 0) {
+          list.innerHTML = '<div class="no-data">No active emergencies<br><span style="font-size:11px">Polling every 10 seconds…</span></div>';
+        } else {
+          list.innerHTML = data.map(u => `
+            <div class="emergency-card">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                <div class="user-name">👤 ${u.name}</div>
+                <button class="locate-btn" onclick="flyTo(${u.latitude}, ${u.longitude})">📍 Locate</button>
+              </div>
+              <div class="coords">📡 ${u.latitude.toFixed(5)}, ${u.longitude.toFixed(5)}</div>
+              <div class="time-ago">⏱ Updated ${timeAgo(u.last_updated)}</div>
+            </div>
+          `).join('');
+        }
+
+      } catch { /* silent fail */ }
+    }
+
+    function flyTo(lat, lng) {
+      map.flyTo([lat, lng], 14, { animate: true, duration: 1.2 });
+    }
+
+    // ── Stats ─────────────────────────────────────────────────────────────────
+    async function fetchStats() {
+      try {
+        const res = await fetch('/admin/stats');
+        const data = await res.json();
+        document.getElementById('stat-active').textContent = data.activeEmergencies;
+        document.getElementById('stat-users').textContent = data.totalUsers;
+        document.getElementById('stat-total').textContent = data.totalActivations;
+      } catch {}
+    }
+
+    // ── SOS Log ───────────────────────────────────────────────────────────────
+    async function fetchLog() {
+      try {
+        const res = await fetch('/admin/log');
+        const data = await res.json();
+        const list = document.getElementById('log-list');
+        if (data.length === 0) {
+          list.innerHTML = '<div class="no-data">No activity yet</div>';
+          return;
+        }
+        list.innerHTML = data.map(entry => `
+          <div class="log-item">
+            <span class="log-action ${entry.action}">${entry.action}</span>
+            <div class="log-details">
+              <div class="name">${entry.user_name}</div>
+              <div class="meta">
+                ${entry.latitude ? `${entry.latitude.toFixed(4)}, ${entry.longitude.toFixed(4)} · ` : ''}
+                ${new Date(entry.timestamp + ' UTC').toLocaleString()}
+              </div>
+            </div>
+          </div>
+        `).join('');
+      } catch {}
+    }
+
+    // ── Tabs ──────────────────────────────────────────────────────────────────
+    function switchTab(tab, btn) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + tab).classList.add('active');
+      if (tab === 'log') fetchLog();
+    }
+
+    async function logout() {
+      await fetch('/logout');
+      location.href = 'index.html';
+    }
+
+    // ── Polling ───────────────────────────────────────────────────────────────
+    fetchEmergencies();
+    fetchStats();
+    setInterval(() => {
+      fetchEmergencies();
+      fetchStats();
+    }, 10000);
+
+  </script>
+</body>
+</html>

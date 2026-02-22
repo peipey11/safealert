@@ -1,0 +1,4 @@
+node_modules/
+sos.db
+.env
+*.log

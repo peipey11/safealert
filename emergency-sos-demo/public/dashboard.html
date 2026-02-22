@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SafeAlert – Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="toast"></div>
+  <div class="app-layout">
+    <!-- TOPBAR -->
+    <header class="topbar">
+      <div class="topbar-brand">
+        <div class="dot"></div>
+        SafeAlert
+      </div>
+      <div class="topbar-right">
+        <span id="user-greeting">Hello…</span>
+        <button class="btn-ghost" onclick="logout()" style="padding:6px 14px;font-size:13px">Sign Out</button>
+      </div>
+    </header>
+
+    <!-- MAIN -->
+    <main class="main-content">
+
+      <!-- SOS BUTTON -->
+      <div class="sos-section">
+        <div class="sos-ring">
+          <button class="sos-btn" id="sos-btn" onclick="activateSOS()">SOS</button>
+        </div>
+        <div class="sos-status" id="sos-status">Press to send emergency alert</div>
+        <button class="cancel-btn" id="cancel-btn" onclick="deactivateSOS()">✕ Cancel Emergency</button>
+      </div>
+
+      <!-- CONTACTS -->
+      <div class="card">
+        <h3>
+          <span class="icon">👥</span>
+          Emergency Contacts
+          <span class="count-badge" id="contact-count">0 / 3</span>
+        </h3>
+
+        <div class="contact-form" id="contact-form">
+          <div class="form-group">
+            <label>Name</label>
+            <input type="text" id="contact-name" placeholder="Jane Doe" />
+          </div>
+          <div class="form-group">
+            <label>Phone</label>
+            <input type="tel" id="contact-phone" placeholder="+91 99999 00000" />
+          </div>
+          <button class="btn-primary" onclick="addContact()">Add</button>
+        </div>
+
+        <div class="contact-list" id="contact-list">
+          <p style="color:var(--muted);font-size:13px;text-align:center;padding:16px 0">No contacts added yet</p>
+        </div>
+      </div>
+
+      <!-- INFO CARD -->
+      <div class="card">
+        <h3><span class="icon">ℹ️</span> How it works</h3>
+        <p style="font-size:14px;color:var(--muted);line-height:1.7">
+          When you press <strong style="color:var(--text)">SOS</strong>, your live GPS location is sent to our emergency response dashboard. 
+          Responders are alerted immediately. Your location updates every 15 seconds while the alert is active. 
+          Press <em style="color:var(--text)">Cancel Emergency</em> when you're safe.
+        </p>
+      </div>
+
+    </main>
+  </div>
+
+  <script>
+    const toast = document.getElementById('toast');
+    function showToast(msg, type = '') {
+      toast.textContent = msg;
+      toast.className = `show ${type}`;
+      setTimeout(() => toast.className = '', 3500);
+    }
+
+    let sosActive = false;
+    let locationInterval = null;
+
+    // ── Init ──────────────────────────────────────────────────────────────────
+    async function init() {
+      try {
+        const res = await fetch('/me');
+        if (!res.ok) { location.href = 'login.html'; return; }
+        const user = await res.json();
+        if (user.isAdmin) { location.href = 'admin.html'; return; }
+        document.getElementById('user-greeting').textContent = `Hello, ${user.name.split(' ')[0]}`;
+        if (user.emergency_status === 1) setSOSActive(true);
+      } catch (e) { location.href = 'login.html'; }
+      loadContacts();
+    }
+
+    // ── SOS ──────────────────────────────────────────────────────────────────
+    function setSOSActive(active) {
+      sosActive = active;
+      const btn = document.getElementById('sos-btn');
+      const status = document.getElementById('sos-status');
+      const cancel = document.getElementById('cancel-btn');
+
+      if (active) {
+        btn.classList.add('active');
+        btn.disabled = true;
+        status.textContent = 'Emergency Active – Responders Notified';
+        status.className = 'sos-status active';
+        cancel.classList.add('visible');
+        startLocationUpdates();
+      } else {
+        btn.classList.remove('active');
+        btn.disabled = false;
+        status.textContent = 'Press to send emergency alert';
+        status.className = 'sos-status';
+        cancel.classList.remove('visible');
+        stopLocationUpdates();
+      }
+    }
+
+    function activateSOS() {
+      const btn = document.getElementById('sos-btn');
+      btn.disabled = true;
+      btn.textContent = '…';
+
+      function sendSOS(lat, lng) {
+        fetch('/activate-sos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ latitude: lat, longitude: lng })
+        })
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            setSOSActive(true);
+            showToast('🚨 Emergency alert sent to responders', 'error');
+          } else {
+            showToast(data.error || 'Failed to activate SOS', 'error');
+            btn.disabled = false; btn.textContent = 'SOS';
+          }
+        })
+        .catch(() => {
+          showToast('Network error. Try again.', 'error');
+          btn.disabled = false; btn.textContent = 'SOS';
+        });
+      }
+
+      if (!navigator.geolocation) {
+        // Fallback: use demo coordinates (Kerala, India)
+        showToast('Using demo location (GPS unavailable)', '');
+        sendSOS(10.0159, 76.3419);
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => sendSOS(pos.coords.latitude, pos.coords.longitude),
+        (err) => {
+          // On permission denied or any error, use demo coords so SOS still works
+          console.warn('Geolocation error:', err.message);
+          showToast('Using demo location (GPS blocked)', '');
+          sendSOS(10.0159, 76.3419);
+        },
+        { timeout: 8000, enableHighAccuracy: true }
+      );
+    }
+
+    async function deactivateSOS() {
+      try {
+        await fetch('/deactivate-sos', { method: 'POST' });
+        setSOSActive(false);
+        showToast('Emergency cancelled. Stay safe.', 'success');
+      } catch {
+        showToast('Network error. Try again.', 'error');
+      }
+    }
+
+    function startLocationUpdates() {
+      locationInterval = setInterval(() => {
+        navigator.geolocation.getCurrentPosition(pos => {
+          fetch('/update-location', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ latitude: pos.coords.latitude, longitude: pos.coords.longitude })
+          });
+        });
+      }, 15000);
+    }
+
+    function stopLocationUpdates() {
+      if (locationInterval) { clearInterval(locationInterval); locationInterval = null; }
+    }
+
+    // ── CONTACTS ─────────────────────────────────────────────────────────────
+    async function loadContacts() {
+      const res = await fetch('/contacts');
+      const contacts = await res.json();
+      const list = document.getElementById('contact-list');
+      const count = document.getElementById('contact-count');
+      count.textContent = `${contacts.length} / 3`;
+
+      if (contacts.length === 0) {
+        list.innerHTML = '<p style="color:var(--muted);font-size:13px;text-align:center;padding:16px 0">No contacts added yet</p>';
+        document.getElementById('contact-form').style.display = 'grid';
+        return;
+      }
+
+      list.innerHTML = contacts.map(c => `
+        <div class="contact-item">
+          <div class="info">
+            <strong>${c.name}</strong>
+            <span>${c.phone}</span>
+          </div>
+          <button class="contact-delete" onclick="deleteContact(${c.id})">Remove</button>
+        </div>
+      `).join('');
+
+      document.getElementById('contact-form').style.display = contacts.length >= 3 ? 'none' : 'grid';
+    }
+
+    async function addContact() {
+      const name = document.getElementById('contact-name').value.trim();
+      const phone = document.getElementById('contact-phone').value.trim();
+      if (!name || !phone) { showToast('Name and phone are required', 'error'); return; }
+
+      const res = await fetch('/add-contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, phone })
+      });
+      const data = await res.json();
+      if (!res.ok) { showToast(data.error, 'error'); return; }
+
+      document.getElementById('contact-name').value = '';
+      document.getElementById('contact-phone').value = '';
+      showToast('Contact added', 'success');
+      loadContacts();
+    }
+
+    async function deleteContact(id) {
+      await fetch(`/delete-contact/${id}`, { method: 'DELETE' });
+      showToast('Contact removed', 'success');
+      loadContacts();
+    }
+
+    async function logout() {
+      await fetch('/logout');
+      location.href = 'index.html';
+    }
+
+    init();
+  </script>
+</body>
+</html>
